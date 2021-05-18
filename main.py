@@ -6,28 +6,20 @@ Created on Wed Feb 17 22:05:16 2021
 """
 
 import os
+import sys
+
 import cv2
-import numpy as np
-from tqdm import tqdm
 import matplotlib.pyplot as plt
-from tensorflow.keras import initializers
-from tensorflow.keras.layers import SpatialDropout2D,Input, Conv2D, MaxPooling2D, Conv2DTranspose, concatenate,AveragePooling2D, UpSampling2D, BatchNormalization, Activation, add,Dropout,Permute,ZeroPadding2D,Add, Reshape
-from tensorflow.keras.models import Model, model_from_json
-from tensorflow.keras.callbacks import (ModelCheckpoint,Callback,LearningRateScheduler,EarlyStopping,ReduceLROnPlateau,CSVLogger)
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import ELU, LeakyReLU, ReLU, PReLU
-from tensorflow.keras.utils import plot_model
-from tensorflow.keras import backend as K
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.models import Sequential, load_model
-from sklearn.metrics import classification_report
-from tensorflow.keras import applications, optimizers, callbacks
-import matplotlib
-import tensorflow.keras
+import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import *
+from sklearn.model_selection import train_test_split
+from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import (CSVLogger)
+from tensorflow.keras.models import load_model
+
 from model import DCUNet
 
+print(sys.version)
 print(tf.__version__)
 #tf.config.list_physical_devices('GPU')
 #tf.config.gpu.set_per_process_memory_fraction(0.75)
@@ -41,14 +33,14 @@ PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main\\DATASET"
 for file in os.listdir(PATH+"\\Original"):
     path = PATH + "\\Original\\" + file
     img = cv2.imread(path, 1)
-    resized_img = cv2.resize(img, (256, 192), interpolation=cv2.INTER_CUBIC)
+    resized_img = cv2.resize(img, (128, 96), interpolation=cv2.INTER_CUBIC)
 
     X.append(resized_img)
 
     path2 = PATH + "\\Ground Truth\\" + file[:-4]+"_mask.png"
     msk = cv2.imread(path2, 0)
 
-    resized_msk = cv2.resize(msk, (256, 192), interpolation=cv2.INTER_CUBIC)
+    resized_msk = cv2.resize(msk, (128, 96), interpolation=cv2.INTER_CUBIC)
 
     Y.append(resized_msk)
 
@@ -175,8 +167,10 @@ def evaluateModel(model, X_test, Y_test, batchSize,epoch):
     
     jacard = 0
     dice = 0
+    tversky_value=0
     smooth = 1.0
-    
+    alpha = 0.75
+
     for i in range(len(Y_test)):
 
         yp_2 = yp[i].ravel()
@@ -186,11 +180,18 @@ def evaluateModel(model, X_test, Y_test, batchSize,epoch):
         union = yp_2 + y2 - intersection
         jacard += ((np.sum(intersection)+smooth)/(np.sum(union)+smooth))
 
+        true_pos = K.sum(y2 * yp_2)
+        false_neg = K.sum(y2 * (1 - yp_2))
+        false_pos = K.sum((1 - y2) * yp_2)
+
+        tversky_value += (true_pos + smooth) / (true_pos + alpha * false_neg + (1 - alpha) * false_pos + smooth)
+
         dice += (2. * np.sum(intersection) + smooth) / (np.sum(yp_2) + np.sum(y2) + smooth)
 
     
     jacard /= len(Y_test)
     dice /= len(Y_test)
+    tversky_value /= len(Y_test)
     
 
 
@@ -198,7 +199,7 @@ def evaluateModel(model, X_test, Y_test, batchSize,epoch):
     print('Dice Coefficient : '+str(dice))
 
     fp = open('models/log.txt','a')
-    fp.write(str(epoch+1)+','+str(jacard)+','+str(dice)+'\n')
+    fp.write(str(epoch+1)+','+str(jacard)+','+str(dice)+','+str(tversky_value.numpy())+'\n')
     fp.close()
 
     fp = open('models/best.txt','r')
@@ -212,6 +213,7 @@ def evaluateModel(model, X_test, Y_test, batchSize,epoch):
         fp = open('models/best.txt','w')
         fp.write(str(jacard))
         fp.close()
+        model.save(f'models\\best.h5')
 
     saveModel(model,epoch=epoch)
 
@@ -231,7 +233,7 @@ def create_model(input_shape, checkpoint_epoch=0):
     height,width = input_shape
     path = "C:/Users/Boris/Desktop/DC-UNet-main/models/working_models"
     if checkpoint_epoch==0:
-        base_model = DCUNet(height=192, width=256, channels=3)
+        base_model = DCUNet(height=96, width=128, channels=3)
     else:
         # this line is used if we're using checkpoints by epoch
         #base_model = load_model(f"{path}/ep_{checkpoint_epoch:02d}.h5",custom_objects={"focal_tversky":focal_tversky,"dice_coef":dice_coef,"jacard":jacard})
@@ -244,8 +246,8 @@ def create_model(input_shape, checkpoint_epoch=0):
 
 CHECKPOINT_EP = 0
 #model = DCUNet(height=192, width=256, channels=3)
-model = create_model((192,256),checkpoint_epoch=CHECKPOINT_EP)
-model.compile(optimizer='adam', loss=focal_tversky, metrics=[dice_coef, jacard, 'accuracy'])
+model = create_model((157,187),checkpoint_epoch=CHECKPOINT_EP)
+model.compile(optimizer='adam', loss=iou_loss, metrics=[dice_coef, jacard, 'accuracy'])
 #binary_crossentropy
 #model.summary()
 #saveModel(model)
