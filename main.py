@@ -9,6 +9,7 @@ import os
 import sys
 
 import cv2
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
@@ -16,246 +17,127 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras import backend as K
 from tensorflow.keras.callbacks import (CSVLogger)
 from tensorflow.keras.models import load_model
-
+from tensorflow.keras.applications.resnet50 import ResNet50
+from tensorflow.keras.optimizers import Adam
 from model import DCUNet
-
+from generator_file import My_Generator,SaveImages,ValidPredict
+from evaluation import tversky_loss,tversky,focal_tversky,jacard,dice_coef,iou_loss,dice_coef_loss
+from evaluation import load_files,load_model,make_list,class_vector,parse_image,set_shapes,create_model
+from second_model import unet_model
 print(sys.version)
 print(tf.__version__)
+from os import walk
 #tf.config.list_physical_devices('GPU')
 #tf.config.gpu.set_per_process_memory_fraction(0.75)
 #tf.config.gpu.set_per_process_memory_growth(True)
 
 # prepare training and testing set
 
-X = []
-Y = []
-PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main\\DATASET"
-for file in os.listdir(PATH+"\\Original"):
-    path = PATH + "\\Original\\" + file
-    img = cv2.imread(path, 1)
-    resized_img = cv2.resize(img, (128, 96), interpolation=cv2.INTER_CUBIC)
-
-    X.append(resized_img)
-
-    path2 = PATH + "\\Ground Truth\\" + file[:-4]+"_mask.png"
-    msk = cv2.imread(path2, 0)
-
-    resized_msk = cv2.resize(msk, (128, 96), interpolation=cv2.INTER_CUBIC)
-
-    Y.append(resized_msk)
-
-X = np.array(X)
-Y = np.array(Y)
-
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=5)
-Y_train = Y_train.reshape((Y_train.shape[0],Y_train.shape[1],Y_train.shape[2],1))
-Y_test = Y_test.reshape((Y_test.shape[0],Y_test.shape[1],Y_test.shape[2],1))
-
-
-X_train = X_train / 255
-X_test = X_test / 255
-Y_train = Y_train / 255
-Y_test = Y_test / 255
-
-Y_train = np.round(Y_train,0)	
-Y_test = np.round(Y_test,0)	
-
-print(X_train.shape)
-print(Y_train.shape)
-print(X_test.shape)
-print(Y_test.shape)
-#checkpoint = ModelCheckpoint(filepath="C:\\Users\\Boris\\Desktop\\DC-UNet-main\\models\\v1_ep_{epoch:02d}.hdf5", monitor="val_loss", verbose=1,
-#                             save_best_only=False, mode='min', save_weights_only=False)
-#reduceLROnPlat = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, verbose=1, mode='auto',
-#                                   min_delta=0.0001)
-#early = EarlyStopping(monitor="val_loss", mode="min", patience=9)
-csv_logger = CSVLogger(filename='C:\\Users\\Boris\\Desktop\\DC-UNet-main\\results\\v1_training_log.csv', separator=',', append=True)
-callbacks_list = [csv_logger]
-# different loss functions
-def dice_coef(y_true, y_pred):
-    smooth = 1.0  #0.0
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
-
-def jacard(y_true, y_pred):
-
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum ( y_true_f * y_pred_f)
-    union = K.sum ( y_true_f + y_pred_f - y_true_f * y_pred_f)
-
-    return intersection/union
-
-def dice_coef_loss(y_true,y_pred):
-    return 1 - dice_coef(y_true,y_pred)
-
-def iou_loss(y_true,y_pred):
-    return 1 - jacard(y_true, y_pred)
-
-def tversky(y_true, y_pred):
-    y_true_pos = K.flatten(y_true)
-    y_pred_pos = K.flatten(y_pred)
-    true_pos = K.sum(y_true_pos * y_pred_pos)
-    false_neg = K.sum(y_true_pos * (1-y_pred_pos))
-    false_pos = K.sum((1-y_true_pos)*y_pred_pos)
-    alpha = 0.75
-    smooth = 1
-    return (true_pos + smooth)/(true_pos + alpha*false_neg + (1-alpha)*false_pos + smooth)
-def tversky_loss(y_true, y_pred):
-    return 1 - tversky(y_true,y_pred)
-def focal_tversky(y_true,y_pred):
-    pt_1 = tversky(y_true, y_pred)
-    gamma = 0.75
-    return K.pow((1-pt_1), gamma)
 
 # training
 
-def saveModel(model,epoch):
 
-    model_json = model.to_json()
+#'''
+#starting params
+PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main\\DATASET"
+tf.random.set_seed(42)
+np.random.seed(42)
+CHECKPOINT_EP = 31
+AUGMENTATIONS = False
+BATCH_SIZE = 8#64
+BUFFER_SIZE = 1000
+LR = 1e-3
+OPTIMIZER = Adam(LR,clipnorm=0.001)
+EPOCHS = 200
+HEIGHT = 96 #96
+WIDTH = 128 #128
+LOSS= tversky_loss
+X = []
+Y = []
 
-    try:
-        os.makedirs('models')
-    except:
-        pass
-    
-    fp = open('models/modelP.json','w')
-    fp.write(model_json)
-    # this line is used if we're using checkpoints by epoch
-    #model.save(f'models\\working_models\\ep_{epoch+1:02d}.h5')
-    model.save(f'models\\working_models\\checkpoint.h5')
+original = os.listdir(f'{PATH}/Original')
+del_ext = [f.split('.')[0] for f in original]
+mask = [f + '_mask.png' for f in del_ext]
+klase = [f.split(' ')[0] for f in original]
 
+original_aug = os.listdir(f'{PATH}\\augmented_images\\images')
+del_ext_mask = [f.split('.')[0] for f in original_aug]
+mask_aug = [f + '_mask.png' for f in del_ext_mask]
+aug_klase = class_vector(original_aug)
+aug_df = pd.concat([pd.Series(original_aug), pd.Series(mask_aug), pd.Series(aug_klase)], axis=1)
 
-def evaluateModel(model, X_test, Y_test, batchSize,epoch):
-    
-    try:
-        os.makedirs('results')
-    except:
-        pass 
-    
-    yp = model.predict(x=X_test, batch_size=batchSize, verbose=1)
-    yp = np.round(yp,0)
+df = pd.concat([pd.Series(original),pd.Series(mask),pd.Series(klase)],axis=1)
+if AUGMENTATIONS:
+    df = pd.concat([df,aug_df],axis=0)#aug_df
 
-    try:
-        os.makedirs(f'results\\images\\epoch_{epoch+1:02d}')
-    except:
-        pass
+x_train, x_test, y_train, y_test = train_test_split(df[0], df[1], test_size=0.2,
+                                                      stratify=df[2], random_state=42)
 
-    for i in range(10):
+#klase = [f.split(' ')[0] for f in x_train]
 
-        plt.figure(figsize=(20,10))
-        plt.subplot(1,3,1)
-        plt.imshow(X_test[i])
-        plt.title('Input')
-        plt.subplot(1,3,2)
-        plt.imshow(Y_test[i].reshape(Y_test[i].shape[0],Y_test[i].shape[1]))
-        plt.title('Ground Truth')
-        plt.subplot(1,3,3)
-        plt.imshow(yp[i].reshape(yp[i].shape[0],yp[i].shape[1]))
-        plt.title('Prediction')
+klase_1=class_vector(x_train)
+x_train.reset_index(drop=True, inplace=True)
+y_train.reset_index(drop=True, inplace=True)
+g = pd.concat([x_train,y_train,pd.Series(klase_1)],axis=1)
+g.columns =[0,1,2]
+x_train, x_val, y_train, y_val = train_test_split(g[0], g[1], test_size=0.125,
+                                                      stratify=g[2], random_state=42)
 
-        intersection = yp[i].ravel() * Y_test[i].ravel()
-        union = yp[i].ravel() + Y_test[i].ravel() - intersection
+valid_predict = ValidPredict(valid_data=(x_val,y_val),img_size=(WIDTH,HEIGHT))
+#train_generator = My_Generator(x_train, y_train, PATH, batch_size=batch_size, is_train=True,IMG_size=(WIDTH,HEIGHT)) #accurate order of width and height
+#train_mixup = My_Generator(x_train, y_train, PATH, batch_size=BATCH_SIZE, is_train=True, mix=False, augment=False,IMG_size=(WIDTH,HEIGHT))
+#valid_generator = My_Generator(x_val, y_val, PATH, batch_size=BATCH_SIZE, is_train=False,IMG_size=(WIDTH,HEIGHT))
+save_images_callback = SaveImages(raw_data=(x_train,y_train))
+best_save= tf.keras.callbacks.ModelCheckpoint(
+    'C:\\Users\\Boris\\Desktop\\DC-UNet-main\\results\\model_best.h5', monitor='val_loss', verbose=0, save_best_only=True,
+    save_weights_only=False, mode='auto', save_freq='epoch',
+    options=None)
+weights_save= tf.keras.callbacks.ModelCheckpoint(
+    'C:\\Users\\Boris\\Desktop\\DC-UNet-main\\results\\weights.h5', monitor='val_loss', verbose=0, save_best_only=False,
+    save_weights_only=True, mode='auto', save_freq='epoch',
+    options=None)
+model_checkpoint= tf.keras.callbacks.ModelCheckpoint(
+    'C:\\Users\\Boris\\Desktop\\DC-UNet-main\\results\\model_checkpoint.h5', monitor='val_loss', verbose=0, save_best_only=False,
+    save_weights_only=True, mode='auto', save_freq='epoch',
+    options=None)
+csv_logger = CSVLogger(filename='C:\\Users\\Boris\\Desktop\\DC-UNet-main\\results\\v1_training_log.csv', separator=',', append=True)
+callbacks_list = [csv_logger,best_save,model_checkpoint,weights_save,save_images_callback,valid_predict]#,end_eval ,save_images_callback,valid_predict
+## GETTING TRAIN GEN
+ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+#dataset = ds.map(lambda x,y: parse_image(x,y),num_parallel_calls=tf.data.AUTOTUNE)
+dataset = ds.map(lambda x,y: set_shapes(x,y), num_parallel_calls=tf.data.AUTOTUNE)
+train = dataset.cache().prefetch(10).shuffle(BUFFER_SIZE).batch(BATCH_SIZE).repeat()
+## GETTING VAL GEN
+ds = tf.data.Dataset.from_tensor_slices((x_val, y_val))
+dataset = ds.map(lambda x,y: set_shapes(x,y), num_parallel_calls=tf.data.AUTOTUNE)
+val = dataset.cache().prefetch(10).batch(BATCH_SIZE).repeat()#shuffle izmedju
 
-        jacard = ((np.sum(intersection)+1.0)/(np.sum(union)+1.0))
-        plt.suptitle('Jacard Index'+ str(np.sum(intersection)) +'/'+ str(np.sum(union)) +'='+str(jacard))
+model = create_model((HEIGHT,WIDTH),checkpoint_epoch=CHECKPOINT_EP) # (height,width)
+model.compile(optimizer=OPTIMIZER, loss=LOSS, metrics=[dice_coef, jacard, tversky, 'accuracy'])
 
-        plt.savefig(f'results\\images\\epoch_{epoch+1:02d}\\i'+str(i)+'.png',format='png')
-        plt.close()
-    
-    jacard = 0
-    dice = 0
-    tversky_value=0
-    smooth = 1.0
-    alpha = 0.75
+#x_val_list,y_val_mask_list = load_files(r"C:\Users\Boris\Desktop\DC-UNet-main",x_val,y_val,(WIDTH,HEIGHT))
+model.fit(
+    train,
+    validation_data=val,
+    steps_per_epoch=int(np.ceil(float(len(x_train)) / float(BATCH_SIZE))),
+    validation_steps = int(np.ceil(float(len(x_val)) / float(BATCH_SIZE))),
+    epochs=EPOCHS,
+    verbose=1,initial_epoch=CHECKPOINT_EP,callbacks=callbacks_list)
 
-    for i in range(len(Y_test)):
+## CREATING TEST
+ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
+dataset = ds.map(lambda x,y: set_shapes(x,y), num_parallel_calls=tf.data.AUTOTUNE)
+test = dataset.cache().prefetch(10).batch(BATCH_SIZE).repeat()#shuffle izmedju
+loss,result_dice,result_jaccard,result_tversky,accuracy = model.evaluate(test,steps=int(np.ceil(float(len(x_val)) / float(BATCH_SIZE))))
+print("Test results on trained model without saving:")
+print(loss,result_dice,result_jaccard,result_tversky,accuracy)
+model_saved = create_model((HEIGHT,WIDTH),checkpoint_epoch=CHECKPOINT_EP)
+model_saved.load_weights('results/model_best.h5')
+model_saved.compile(optimizer=OPTIMIZER, loss=LOSS, metrics=[dice_coef, jacard, tversky, 'accuracy'])
+loss,result_dice,result_jaccard,result_tversky,accuracy =model_saved.evaluate(test,steps=int(np.ceil(float(len(x_val)) / float(BATCH_SIZE))))
+print("Test results on trained model after saving:")
+print(loss,result_dice,result_jaccard,result_tversky,accuracy)
 
-        yp_2 = yp[i].ravel()
-        y2 = Y_test[i].ravel()
-        
-        intersection = yp_2 * y2
-        union = yp_2 + y2 - intersection
-        jacard += ((np.sum(intersection)+smooth)/(np.sum(union)+smooth))
-
-        true_pos = K.sum(y2 * yp_2)
-        false_neg = K.sum(y2 * (1 - yp_2))
-        false_pos = K.sum((1 - y2) * yp_2)
-
-        tversky_value += (true_pos + smooth) / (true_pos + alpha * false_neg + (1 - alpha) * false_pos + smooth)
-
-        dice += (2. * np.sum(intersection) + smooth) / (np.sum(yp_2) + np.sum(y2) + smooth)
-
-    
-    jacard /= len(Y_test)
-    dice /= len(Y_test)
-    tversky_value /= len(Y_test)
-    
-
-
-    print('Jacard Index : '+str(jacard))
-    print('Dice Coefficient : '+str(dice))
-
-    fp = open('models/log.txt','a')
-    fp.write(str(epoch+1)+','+str(jacard)+','+str(dice)+','+str(tversky_value.numpy())+'\n')
-    fp.close()
-
-    fp = open('models/best.txt','r')
-    best = fp.read()
-    fp.close()
-
-    if(jacard>float(best)):
-        print('***********************************************')
-        print('Jacard Index improved from '+str(best)+' to '+str(jacard))
-        print('***********************************************')
-        fp = open('models/best.txt','w')
-        fp.write(str(jacard))
-        fp.close()
-        model.save(f'models\\best.h5')
-
-    saveModel(model,epoch=epoch)
-
-
-def trainStep(model, X_train, Y_train, X_test, Y_test, epochs, batchSize,checkpoint_epoch=0):
-
-    
-    for epoch in range(checkpoint_epoch,epochs):
-        print('Epoch : {}'.format(epoch+1))
-        model.fit(x=X_train, y=Y_train, batch_size=batchSize, epochs=1, verbose=1,callbacks=callbacks_list)
-
-        evaluateModel(model,X_test, Y_test,batchSize,epoch)
-
-    return model 
-
-def create_model(input_shape, checkpoint_epoch=0):
-    height,width = input_shape
-    path = "C:/Users/Boris/Desktop/DC-UNet-main/models/working_models"
-    if checkpoint_epoch==0:
-        base_model = DCUNet(height=96, width=128, channels=3)
-    else:
-        # this line is used if we're using checkpoints by epoch
-        #base_model = load_model(f"{path}/ep_{checkpoint_epoch:02d}.h5",custom_objects={"focal_tversky":focal_tversky,"dice_coef":dice_coef,"jacard":jacard})
-        base_model = load_model(f"{path}/checkpoint.h5",
-                                custom_objects={"focal_tversky": focal_tversky, "dice_coef": dice_coef,
-                                                "jacard": jacard})
-    model = base_model
-
-    return model
-
-CHECKPOINT_EP = 0
-#model = DCUNet(height=192, width=256, channels=3)
-model = create_model((157,187),checkpoint_epoch=CHECKPOINT_EP)
-model.compile(optimizer='adam', loss=iou_loss, metrics=[dice_coef, jacard, 'accuracy'])
-#binary_crossentropy
-#model.summary()
-#saveModel(model)
-
-fp = open('models/log.txt','w')
-fp.close()
-fp = open('models/best.txt','w')
-fp.write('-1.0')
-fp.close()
-    
-trainStep(model, X_train, Y_train, X_test, Y_test, epochs=300, batchSize=2,checkpoint_epoch=CHECKPOINT_EP)
+loss,result_dice,result_jaccard,result_tversky,accuracy =model_saved.evaluate(val,steps=int(np.ceil(float(len(x_val)) / float(BATCH_SIZE))))
+print("Validation results on trained model after saving:")
+print(loss,result_dice,result_jaccard,result_tversky,accuracy)

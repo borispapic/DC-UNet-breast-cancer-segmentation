@@ -16,12 +16,13 @@ def plot_function(PATH):
     df= pd.read_csv(f"{PATH}\\v1_training_log.csv")
     #print(df.iloc[:,:4].head(10))
     #plt.plot(np.arange(1,301),tr_metrics.iloc[:,1])
-    line1, = plt.plot(np.arange(1,201),df.iloc[:200,5],'b',label='tversky value training')
-    line2, = plt.plot(np.arange(1,201),df.iloc[:200,10],'orange',label='tversky value validation')
+    line1, = plt.plot(np.arange(1,201),df.iloc[:200,4],'b',label='Focal Tversky training loss')
+    line2, = plt.plot(np.arange(1,201),df.iloc[:200:,9],'orange',label='Focal Tversky validation loss')
     plt.legend(handles=[line1, line2])
     plt.grid()
     plt.xlabel('Epoch(s)')
-    plt.ylabel('Tversky value')
+    plt.ylabel('Loss')
+    #plt.ylim(0,1)
     plt.show()
 
 def get_confusion_matrix(y_true,y_pred):
@@ -30,5 +31,5 @@ def get_confusion_matrix(y_true,y_pred):
     print(f'True positives: {tp}, False positives: {fp}, False negatives: {fn}, True negatives: {tn}')
 
 PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main" +'\\results' #+ "\\models\\working_models\\MODEL V2\\"
-PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main" + "\\models\\working_models\\MODEL V4"
+PATH = "C:\\Users\\Boris\\Desktop\\DC-UNet-main\\models\\working_models\\" +"MODEL V19 - focal tversky AUGMENTATION no aug in test data"
 plot_function(PATH)

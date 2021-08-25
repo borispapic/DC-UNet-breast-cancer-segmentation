@@ -116,30 +116,18 @@ callbacks_list = [csv_logger,best_save,model_checkpoint,weights_save]#,end_eval 
 #model.compile(optimizer=Adam(1e-5), loss=iou_loss, metrics=[tf.losses.categorical_crossentropy,dice_coef, jacard, tversky, 'accuracy'])
 model = unet_model(1)
 model.compile(optimizer='adam',
-              loss=tf.keras.losses.CategoricalCrossentropy(),
+              loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True),
               metrics=['accuracy',tversky,jacard,dice_coef])
 print(len(x_val))
 print(int(np.ceil(float(len(x_val)) / float(batch_size))))
 print(x_val)
 x_val_list,y_val_mask_list = load_files(r"C:\Users\Boris\Desktop\DC-UNet-main",x_val,y_val,(WIDTH,HEIGHT))
-#sys.exit()
-'''
-model.fit(
-    train_mixup,
-    steps_per_epoch=int(np.ceil(float(len(x_train)) / float(batch_size))),
-    validation_data=valid_generator,
-    validation_steps=int(np.ceil(float(len(x_val)) / float(batch_size))),
-    epochs=EPOCHS,
-    verbose=1,max_queue_size=1,
-    workers=1, use_multiprocessing=False ,initial_epoch=CHECKPOINT_EP,callbacks=callbacks_list)'''
+
 
 model.fit(train_mixup, epochs=EPOCHS,
                           steps_per_epoch=int(np.ceil(float(len(x_train)) / float(batch_size))),
                           validation_data=(x_val_list,y_val_mask_list),
                           callbacks=callbacks_list,verbose=1)
-fp = open('results/opis.txt','w')
-fp.write('iou loss,96x128,200 epochs,new split')
-fp.close()
 
 
 weights = model.get_weights()
@@ -152,8 +140,11 @@ weights_1 = model1.get_weights()
 #print(np.shape(weights_1[0][0]))
 #print(len(np.array(weights).reshape([-1])))
 #print(np.testing.assert_array_equal(weights,weights))
+#tf.keras.utils.plot_model(model, show_shapes=True)
 for (layer,layer1) in zip(model.layers,model1.layers):
     result = np.array_equiv(layer.get_weights(),layer1.get_weights())
+    #print(layer.get_config())
+    #print(layer1.get_config())
     #print(result)
     if result ==False:
         print('Faulty layer')
@@ -166,6 +157,7 @@ for (layer,layer1) in zip(model.layers,model1.layers):
         #print(np.shape(layer.get_weights()[0]))
         #print(np.shape(layer1.get_weights()[0]))
         result1 = np.array_equiv(layer.get_weights()[0], layer1.get_weights()[0])
+        #print(np.sum(np.subtract(layer.get_weights()[0],layer1.get_weights()[0])))
         print(result1)
         result1 = np.array_equiv(layer.get_weights()[1], layer1.get_weights()[1])
         print(result1)
@@ -174,14 +166,14 @@ for (layer,layer1) in zip(model.layers,model1.layers):
         #print(previous_layer1)
     previous_layer = layer.get_config()
     previous_layer1 = layer1.get_config()
-
 averagek= []
-for i in range(len(x_val_list)):
-    x_val = np.expand_dims(x_val_list[i], axis=0)
+
+for x in x_val_list:
+    x_val = np.expand_dims(x, axis=0)
     y_pred = model.predict(x_val)
     y_pred1 = model.predict(x_val)
-    rez = tversky(y_val_mask_list[i],y_pred)
-    averagek.append(rez)
-    print(np.array_equiv(y_pred,y_pred1))
+    #print(np.array_equal(y_pred,y_pred1))
+    #print(np.sum(np.subtract(y_pred,y_pred1)))
+    print(np.allclose(y_pred,y_pred1))
 
 print(np.sum(averagek)/len(averagek))
